@@ -1,0 +1,23 @@
+version: '3.7'
+
+networks:
+  performance:
+    driver: bridge
+
+services:
+    php:
+        image: omrqs/php7.x-sf:develop
+        container_name: reactphp-debug-disable
+        restart: always
+        expose:
+            - ${UPSTREAM_PORT}
+        environment: 
+            UPSTREAM_PORT: ${UPSTREAM_PORT}
+        volumes:
+            - ./:${CONTAINER_PATH}
+            - ./docker/custom.ini:/usr/local/etc/php/conf.d/custom.ini
+            - ./docker/entrypoint.sh:${CONTAINER_PATH}/entrypoint.sh
+        working_dir: ${CONTAINER_PATH}
+        entrypoint: ["sh","${CONTAINER_PATH}/entrypoint.sh"]
+        networks:
+            - performance

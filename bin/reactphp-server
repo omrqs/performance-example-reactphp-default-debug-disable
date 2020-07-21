@@ -1,0 +1,76 @@
+#!/usr/bin/env php
+<?php
+set_time_limit(0);
+
+require __DIR__.'/../vendor/autoload.php';
+
+use Symfony\Bridge\PsrHttpMessage\Factory\HttpFoundationFactory;
+use Symfony\Bridge\PsrHttpMessage\Factory\DiactorosFactory;
+use Symfony\Component\Console\Input\ArgvInput;
+use Symfony\Component\Dotenv\Dotenv;
+use Symfony\Component\Debug\Debug;
+use App\Kernel;
+
+// The check is to ensure we don't use .env in production.
+if (!getenv('APP_ENV')) {
+    if (!class_exists(Dotenv::class)) {
+        throw new \RuntimeException('APP_ENV environment variable is not defined. You need to define environment variables for configuration or add "symfony/dotenv" as a Composer dependency to load variables from a .env file.');
+    }
+    (new Dotenv())->load(__DIR__.'/../.env');
+}
+
+$env = getenv('APP_ENV');
+
+$input = new ArgvInput();
+$debug = (bool) (getenv('APP_DEBUG') ?? (!in_array($env, ['prod']))) && !$input->hasParameterOption('--no-debug', true);
+
+if ($debug) {
+    umask(0000);
+    Debug::enable();
+}
+
+$kernel = new Kernel($env, $debug);
+
+$httpFoundationFactory = new HttpFoundationFactory();
+$psr7Factory = new DiactorosFactory();
+
+// Callback for the loop request.
+$callback = function (Psr\Http\Message\ServerRequestInterface $request) use ($kernel, $httpFoundationFactory, $psr7Factory) {
+    return new React\Promise\Promise(function ($resolve, $reject) use ($request, $kernel, $httpFoundationFactory, $psr7Factory) {
+        try {
+            // Reset manager when db lost connection.
+            $kernel->boot();
+
+            // Convert the Psr Request to Symfony Request with kernel.
+            $sfRequest = $httpFoundationFactory->createRequest($request);
+            $sfResponse = $kernel->handle($sfRequest);
+            $response = $psr7Factory->createResponse($sfResponse);
+
+            $kernel->terminate($sfRequest, $sfResponse);
+
+            $resolve($response);
+        } catch (\Throwable $e) {
+            $reject(new React\Http\Response(
+                500,
+                ['Content-Type' => 'application/json'],
+                json_encode($e->getMessage())
+            ));
+        }
+    });
+};
+
+$loop = React\EventLoop\Factory::create();
+$server = new React\Http\Server($callback);
+
+$hostName = gethostname();
+$hostIp = gethostbyname($hostName);
+$port = $input->getParameterOption('--port', 8081);
+$uri = sprintf('%s:%s', $hostIp, $port);
+
+$socket = new React\Socket\Server($uri, $loop);
+
+$server->listen($socket);
+
+dump(sprintf("System online at '%s' has '%s' mode and debug '%s'", $uri, $env, $debug));
+
+$loop->run();
